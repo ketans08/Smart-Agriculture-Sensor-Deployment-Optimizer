@@ -8,6 +8,10 @@ import matplotlib.patches as patches
 import time
 from scipy.spatial.distance import cdist
 
+
+if 'first_load' not in st.session_state:
+    st.session_state.first_load = True
+
 # --- App Config ---
 st.set_page_config(layout="wide", page_title="Smart Agri CSV Project")
 st.title("Smart-Agriculture Sensor Deployment Optimization")
@@ -16,12 +20,14 @@ st.title("Smart-Agriculture Sensor Deployment Optimization")
 uploaded = st.sidebar.file_uploader(
     "Upload environment CSV (columns: type (target/obstacle), x, y):", type=["csv"]
 )
-if not uploaded:
-    st.info("Please upload a CSV with columns: type,x,y.")
-    st.stop()
+if uploaded:
+    df_env = pd.read_csv(uploaded)
+else:
+    # st.sidebar.info("No file uploaded → using default `sample_env_large.csv`")
+    df_env = pd.read_csv("sample_env_large.csv")
 
 # Read environment
-df_env = pd.read_csv(uploaded)
+# df_env = pd.read_csv(uploaded)
 targets = df_env[df_env['type']=='target'][['x','y']].values
 obstacles = df_env[df_env['type']=='obstacle'][['x','y']].values
 
@@ -156,8 +162,15 @@ def plot_layout(agent, title, color, score):
     ax.legend(loc='upper right', fontsize='small', markerscale=0.7, framealpha=0.8)
     return fig
 
+if st.session_state.first_load:
+    run_opt = True
+    st.session_state.first_load = False
+else:
+    run_opt = st.sidebar.button("Run Optimization")
+
+
 # --- Run Optimization on Click ---
-if st.sidebar.button("Run Optimization"):
+if run_opt:
     np.random.seed(42)
     g_agent, g_score, g_conv, g_metrics = traditional_gwo_run()
     d_agent, d_score, d_conv, d_metrics = dmpa_gwo_run()

@@ -613,8 +613,8 @@ runners = {
     'PSO':      run_robust_pso_with_convergence,
     'GWO':      run_robust_gwo_with_convergence,
     'DE':       run_robust_de_with_convergence,
-    # 'GA':       run_robust_ga_with_convergence,
-    # 'WOA':      run_robust_woa_with_convergence,
+    'GA':       run_robust_ga_with_convergence,
+    'WOA':      run_robust_woa_with_convergence,
 }
 
 # ---------------------------------------------------------------------
@@ -878,15 +878,15 @@ if relays.size > 0:
 else:
     cov_r, ov_r, conn_r, ovl_r, bnd_r, sf_r = cov_a, ov_a, conn_a, ovl_a, bnd_a, sf_a
 
-# cols = st.columns(3)
-# cols[0].metric("Coverage",   f"{cov_b:.2f} → {cov_a:.2f}", f"{cov_r - cov_a:+.2f} (relay)")
-# cols[1].metric("Conn",       f"{conn_b:.3f} → {conn_a:.3f}", f"{conn_r - conn_a:+.3f} (relay)")
-# cols[2].metric("Static Fit", f"{sf_b:+.3f} → {sf_a:+.3f}", f"{sf_r - sf_a:+.3f} (relay)")
+cols = st.columns(3)
+cols[0].metric("Coverage",   f"{cov_b:.2f} → {cov_a:.2f}", f"{cov_r - cov_a:+.2f} (relay)")
+cols[1].metric("Conn",       f"{conn_b:.3f} → {conn_a:.3f}", f"{conn_r - conn_a:+.3f} (relay)")
+cols[2].metric("Static Fit", f"{sf_b:+.3f} → {sf_a:+.3f}", f"{sf_r - sf_a:+.3f} (relay)")
 
-# fig_rel = explorer_plot(dm_sensors, dm_alive, relays,
-#                         comm_range, obstacles, targets,
-#                         sensor_range, area_size)
-# st.pyplot(fig_rel)
+fig_rel = explorer_plot(dm_sensors, dm_alive, relays,
+                        comm_range, obstacles, targets,
+                        sensor_range, area_size)
+st.pyplot(fig_rel)
 
 # ---------------- Interactive Failure Scenario Explorer (DMPA‑GWO) ----------------
 st.subheader("🔍 Failure Scenario Explorer (DMPA‑GWO)")

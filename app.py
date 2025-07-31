@@ -20,15 +20,6 @@ from matplotlib.lines import Line2D
 from scipy.spatial.distance import cdist
 import networkx as nx
 
-
-try:
-    from sklearn.cluster import KMeans  # optional dependency
-    _HAVE_SKLEARN = True
-except Exception:
-    KMeans = None
-    _HAVE_SKLEARN = False
-
-
 # -------------------- Persistence folder -----------------------------
 PERSIST_DIR = Path(".persist")
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -297,150 +288,43 @@ def suggest_relays(sensors: np.ndarray, alive_mask: np.ndarray, comm_range: floa
 # ---------------------------------------------------------------------
 # Algorithms
 # ---------------------------------------------------------------------
-def run_mo_pso_dmpa_gwo_pp_with_convergence(rng: np.random.Generator):
-    pack_count_init   = 5
-    mutation_max      = 0.15 * (bounds_high - bounds_low)
-    mutation_min      = 0.01 * (bounds_high - bounds_low)
-    c1_init, c2_init  = 1.5, 1.5
-    w_inertia_init    = 0.4
-    wg_init           = 0.5
-
-    pop  = rng.uniform(bounds_low, bounds_high, (pop_size, 2 * sensor_count))
-    vel  = np.zeros_like(pop)
-
+def run_mo_pso_dmpa_gwo_with_convergence():
+    pop = np.random.uniform(bounds_low, bounds_high, (pop_size, dim))
+    vel = np.zeros_like(pop)
     def obj(a):
-        return (alpha_weight * static_metrics(a.reshape(-1, 2))[5] +
-                (1 - alpha_weight) * robust_penalty(a, rng, mc_train))
-
+        return alpha_weight*static_metrics(a.reshape(sensor_count,2))[5] + \
+               (1-alpha_weight)*robust_penalty(a, samples=5)
     pbest        = pop.copy()
     pbest_scores = np.array([obj(a) for a in pop])
     gbest_idx    = np.argmin(pbest_scores)
-
-    # simple pack state
-    pack_of = np.repeat(np.arange(pack_count_init), np.ceil(pop_size/pack_count_init))[:pop_size]
-    improvement_hist = np.zeros((pop_size,), dtype=float)
-
-    converg = []; best_so_far = np.inf
-
-    def diversity(pop): return np.trace(np.cov(pop.T))
-    def entropy_controller(div):
-        div_norm = np.clip((div - 1e-6) / (1e6 - 1e-6 + 1e-9), 0, 1)
-        mut_amp  = mutation_min + (1 - div_norm) * (mutation_max - mutation_min)
-        wg       = wg_init * (0.5 + 0.5 * (1 - div_norm))
-        return mut_amp, wg
-
-    def select_leaders_and_weights(pop, pbest, pbest_scores, pack_of, k_lead=3):
-        k = pack_of.max() + 1
-        L, W = [], np.zeros((k, 3))
-        for pid in range(k):
-            idx = np.where(pack_of == pid)[0]
-            if len(idx) == 0: L.append(None); continue
-            top_idx = idx[np.argsort(pbest_scores[idx])[:min(k_lead, len(idx))]]
-            leaders = pbest[top_idx]
-            contrib = improvement_hist[top_idx]
-            if contrib.sum() > 0: wts = contrib / contrib.sum()
-            else: wts = np.ones(len(top_idx)) / len(top_idx)
-            if len(top_idx) < 3:
-                wts = np.pad(wts, (0, 3 - len(top_idx)), constant_values=0)
-                leaders = np.vstack([leaders, np.repeat(leaders[-1:], 3 - len(top_idx), axis=0)])
-            L.append(leaders[:3]); W[pid] = wts[:3]
-        return L, W
-
-    def gwo_pack_pull(xi, leaders, wts, a):
-        A = 2 * a * rng.random(xi.shape[0]) - a
-        C = 2 * rng.random(xi.shape[0])
-        acc = np.zeros_like(xi)
-        for j in range(3):
-            acc += wts[j] * (leaders[j] - A * np.abs(C * leaders[j] - xi))
-        return acc
-
-    def re_cluster_packs(pop, scores, pack_count):
-    
-    # Don’t request more clusters than individuals
-        k = int(min(pack_count, pop.shape[0]))
-        if k <= 1:
-            return np.zeros(pop.shape[0], dtype=int)
-    
-        if _HAVE_SKLEARN:
-            km = KMeans(n_clusters=k, n_init=10, random_state=0)
-            return km.fit_predict(pop)
-    
-        # ---- Fallback: spread by rank (best->worst) across k packs ----
-        n = pop.shape[0]
-        order = np.argsort(scores)       # 0..n-1 (best first)
-        labels = np.arange(n) % k        # 0,1,...,k-1,0,1,...
-        packs = np.empty(n, dtype=int)
-        packs[order] = labels
-        return packs
-
-
-    def assign_roles(pop, scores, t):
-        roles = np.zeros(pop.shape[0], dtype=int)
-        q1 = max(1, int(0.2 * pop.shape[0])); order = np.argsort(scores)
-        roles[order[:q1]]    = 1
-        roles[order[q1:-q1]] = 2
-        roles[order[-q1:]]   = 0
-        return roles
-
-    def migrate(pop, vel, pbest, pbest_scores, pack_of, q=2):
-        k = pack_of.max() + 1
-        for pid in range(k):
-            idx = np.where(pack_of == pid)[0]
-            if len(idx) <= q: continue
-            worst = idx[np.argsort(pbest_scores[idx])[-q:]]
-            pop[worst] = pbest[gbest_idx] + rng.normal(0, 0.01, size=(q, pop.shape[1]))
-            vel[worst] *= 0
-        return pop, vel
-
-    roles = assign_roles(pop, pbest_scores, 0)
-
-    for t in range(iterations + 1):
-        gbest = pbest[gbest_idx]
-        alive_mask = sample_failures(rng, sensor_count)
-        surv = gbest.reshape(-1, 2)[alive_mask[:gbest.reshape(-1,2).shape[0]]]
-        fit_after = static_metrics(surv)[5]
-        if fit_after < best_so_far: best_so_far = fit_after
-        converg.append(best_so_far)
-        if t == iterations: break
-
-        div = diversity(pop)
-        mut_amp, wg_raw = entropy_controller(div)
-        a  = 2 - 2 * t / iterations
-        wg = (0.5 - 0.4 * t / iterations) * wg_raw
-        c1, c2 = c1_init, c2_init; w_inertia = w_inertia_init
-
-        if t % 20 == 0 and t > 0: pack_of = re_cluster_packs(pop, pbest_scores, pack_count_init)
-        if t % 15 == 0: roles = assign_roles(pop, pbest_scores, t)
-        leaders, leader_wts = select_leaders_and_weights(pop, pbest, pbest_scores, pack_of)
-        if t % 25 == 0 and t > 0: pop, vel = migrate(pop, vel, pbest, pbest_scores, pack_of, q=2)
-
-        for i in range(pop.shape[0]):
-            r1, r2 = rng.random(pop.shape[1]), rng.random(pop.shape[1])
-            vel[i] = (w_inertia * vel[i] + c1 * r1 * (pbest[i] - pop[i]) + c2 * r2 * (pbest[gbest_idx] - pop[i]))
-            pid = pack_of[i]
-            if leaders[pid] is not None:
-                Xg = gwo_pack_pull(pop[i], leaders[pid], leader_wts[pid], a)
-                vel[i] += wg * (Xg - pop[i])
-            if roles[i] == 0:
-                pop[i] += vel[i] + rng.normal(0, mut_amp, size=pop.shape[1])
-            elif roles[i] == 1:
-                pop[i] += vel[i] + rng.normal(0, 0.2 * mut_amp, size=pop.shape[1])
-            else:
-                pop[i] += vel[i]
-            pop[i] = np.clip(pop[i], bounds_low, bounds_high)
-
-        scores = np.array([
-            (alpha_weight * static_metrics(a.reshape(-1, 2))[5] +
-             (1 - alpha_weight) * robust_penalty(a, rng, mc_train))
-            for a in pop
-        ])
-        improved = scores < pbest_scores
-        improvement_hist[improved] += (pbest_scores[improved] - scores[improved])
-        pbest[improved]        = pop[improved]
-        pbest_scores[improved] = scores[improved]
+    convergence  = []
+    for t in range(iterations+1):
+        # at each iteration, record best-so-far static fitness after failure
+        g = pbest[gbest_idx]
+        surv = g.reshape(sensor_count,2)[np.random.rand(sensor_count)>failure_prob]
+        convergence.append(static_metrics(surv)[5])
+        if t==iterations: break
+        # update
+        a  = 2 - 2*t/iterations
+        wg = 0.5 - 0.4*t/iterations
+        pack_idxs = [np.arange(i*pop_size//5, (i+1)*pop_size//5) for i in range(5)]
+        leaders   = [pop[idx[np.argsort(pbest_scores[idx])[:3]]] for idx in pack_idxs]
+        for i in range(pop_size):
+            r1, r2 = np.random.rand(dim), np.random.rand(dim)
+            vel[i] = 0.4*vel[i] + 1.5*r1*(pbest[i]-pop[i]) + 1.5*r2*(pop[gbest_idx]-pop[i])
+            pi = next(p for p,idx in enumerate(pack_idxs) if i in idx)
+            α,β,δ = leaders[pi]
+            A = 2*a*np.random.rand(dim)-a; C = 2*np.random.rand(dim)
+            Xg = (α - A*np.abs(C*α-pop[i]) +
+                 β - A*np.abs(C*β-pop[i]) +
+                 δ - A*np.abs(C*δ-pop[i]))/3
+            vel[i] += wg*(Xg-pop[i])
+            pop[i] = np.clip(pop[i]+vel[i], bounds_low, bounds_high)
+        scores = np.array([obj(a) for a in pop])
+        mask   = scores < pbest_scores
+        pbest[mask], pbest_scores[mask] = pop[mask], scores[mask]
         gbest_idx = np.argmin(pbest_scores)
-
-    return pbest[gbest_idx], converg
+    return pbest[gbest_idx], convergence
 
 
 def run_robust_pso_with_convergence(rng: np.random.Generator):
@@ -581,7 +465,7 @@ def run_robust_woa_with_convergence(rng: np.random.Generator):
 # Runner dict
 # ---------------------------------------------------------------------
 runners = {
-    'DMPA‑GWO': run_mo_pso_dmpa_gwo_pp_with_convergence,
+    'DMPA‑GWO': run_mo_pso_dmpa_gwo_with_convergence,
     'PSO':      run_robust_pso_with_convergence,
     'GWO':      run_robust_gwo_with_convergence,
     'DE':       run_robust_de_with_convergence,

@@ -1,4 +1,4 @@
-runtime.txt:  python-3.12
+python-3.12
 requirements.txt:
 streamlit>=1.34,<2
 numpy==2.0.1

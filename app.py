@@ -288,43 +288,73 @@ def suggest_relays(sensors: np.ndarray, alive_mask: np.ndarray, comm_range: floa
 # ---------------------------------------------------------------------
 # Algorithms
 # ---------------------------------------------------------------------
-def run_mo_pso_dmpa_gwo_with_convergence():
-    pop = np.random.uniform(bounds_low, bounds_high, (pop_size, dim))
+def run_mo_pso_dmpa_gwo_with_convergence(rng: np.random.Generator):
+    pop = rng.uniform(bounds_low, bounds_high, (pop_size, dim))
     vel = np.zeros_like(pop)
+
     def obj(a):
-        return alpha_weight*static_metrics(a.reshape(sensor_count,2))[5] + \
-               (1-alpha_weight)*robust_penalty(a, samples=5)
+        return (alpha_weight * static_metrics(a.reshape(-1, 2))[5] +
+                (1 - alpha_weight) * robust_penalty(a, rng, mc_train))
+
     pbest        = pop.copy()
     pbest_scores = np.array([obj(a) for a in pop])
     gbest_idx    = np.argmin(pbest_scores)
     convergence  = []
-    for t in range(iterations+1):
-        # at each iteration, record best-so-far static fitness after failure
+
+    pack_count = max(1, min(5, pop_size))
+    edges = np.linspace(0, pop_size, pack_count + 1, dtype=int)
+
+    for t in range(iterations + 1):
+        # record best-so-far static fitness after a sampled failure
         g = pbest[gbest_idx]
-        surv = g.reshape(sensor_count,2)[np.random.rand(sensor_count)>failure_prob]
+        alive = rng.random(sensor_count) > failure_prob
+        surv = g.reshape(sensor_count, 2)[alive]
         convergence.append(static_metrics(surv)[5])
-        if t==iterations: break
-        # update
-        a  = 2 - 2*t/iterations
-        wg = 0.5 - 0.4*t/iterations
-        pack_idxs = [np.arange(i*pop_size//5, (i+1)*pop_size//5) for i in range(5)]
-        leaders   = [pop[idx[np.argsort(pbest_scores[idx])[:3]]] for idx in pack_idxs]
+        if t == iterations:
+            break
+
+        a  = 2 - 2 * t / iterations
+        wg = 0.5 - 0.4 * t / iterations
+
+        # leaders per pack (pad to 3 if needed)
+        leaders = []
+        for i in range(pack_count):
+            idx = np.arange(edges[i], edges[i + 1])
+            if idx.size == 0:
+                L = pbest[np.argsort(pbest_scores)[:3]]
+            else:
+                top = idx[np.argsort(pbest_scores[idx])[:min(3, idx.size)]]
+                L = pbest[top]
+                if L.shape[0] < 3:
+                    L = np.vstack([L, np.repeat(L[-1:], 3 - L.shape[0], axis=0)])
+            leaders.append(L)
+
         for i in range(pop_size):
-            r1, r2 = np.random.rand(dim), np.random.rand(dim)
-            vel[i] = 0.4*vel[i] + 1.5*r1*(pbest[i]-pop[i]) + 1.5*r2*(pop[gbest_idx]-pop[i])
-            pi = next(p for p,idx in enumerate(pack_idxs) if i in idx)
-            α,β,δ = leaders[pi]
-            A = 2*a*np.random.rand(dim)-a; C = 2*np.random.rand(dim)
-            Xg = (α - A*np.abs(C*α-pop[i]) +
-                 β - A*np.abs(C*β-pop[i]) +
-                 δ - A*np.abs(C*δ-pop[i]))/3
-            vel[i] += wg*(Xg-pop[i])
-            pop[i] = np.clip(pop[i]+vel[i], bounds_low, bounds_high)
+            r1, r2 = rng.random(dim), rng.random(dim)
+            vel[i] = (0.4 * vel[i]
+                      + 1.5 * r1 * (pbest[i] - pop[i])
+                      + 1.5 * r2 * (pbest[gbest_idx] - pop[i]))
+
+            # pack index without scans
+            pi = min(pack_count - 1, int(i * pack_count / pop_size))
+            α, β, δ = leaders[pi]
+
+            A = 2 * a * rng.random(dim) - a
+            C = 2 * rng.random(dim)
+            Xg = (α - A * np.abs(C * α - pop[i])
+                + β - A * np.abs(C * β - pop[i])
+                + δ - A * np.abs(C * δ - pop[i])) / 3.0
+
+            vel[i] += wg * (Xg - pop[i])
+            pop[i] = np.clip(pop[i] + vel[i], bounds_low, bounds_high)
+
         scores = np.array([obj(a) for a in pop])
         mask   = scores < pbest_scores
         pbest[mask], pbest_scores[mask] = pop[mask], scores[mask]
         gbest_idx = np.argmin(pbest_scores)
+
     return pbest[gbest_idx], convergence
+
 
 
 def run_robust_pso_with_convergence(rng: np.random.Generator):

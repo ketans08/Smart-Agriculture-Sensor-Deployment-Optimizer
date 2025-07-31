@@ -346,9 +346,28 @@ def run_mo_pso_dmpa_gwo_pp_with_convergence(rng: np.random.Generator):
         return acc
 
     def re_cluster_packs(pop, scores, pack_count):
-        from sklearn.cluster import KMeans
-        km = KMeans(n_clusters=pack_count, n_init='auto', random_state=0)
-        return km.fit_predict(pop)
+    """
+    Return pack labels for each individual.
+    If scikit-learn is available -> use KMeans.
+    Else -> deterministic round-robin by fitness (no external deps).
+    """
+    # Don’t request more clusters than individuals
+        k = int(min(pack_count, pop.shape[0]))
+        if k <= 1:
+            return np.zeros(pop.shape[0], dtype=int)
+
+        if _HAVE_SKLEARN:
+            km = KMeans(n_clusters=k, n_init=10, random_state=0)
+            return km.fit_predict(pop)
+
+    # ---- Fallback: spread by rank (best->worst) across k packs ----
+        n = pop.shape[0]
+        order = np.argsort(scores)       # 0..n-1 (best first)
+        labels = np.arange(n) % k        # 0,1,...,k-1,0,1,...
+        packs = np.empty(n, dtype=int)
+        packs[order] = labels
+        return packs
+
 
     def assign_roles(pop, scores, t):
         roles = np.zeros(pop.shape[0], dtype=int)
